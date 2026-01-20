@@ -1,3 +1,4 @@
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
@@ -5,32 +6,27 @@ class PosePainter extends CustomPainter {
   final List<Pose> poses;
   final Size absoluteImageSize;
   final InputImageRotation rotation;
+  final CameraLensDirection cameraLensDirection; // 1. Add this field
 
-  PosePainter(this.poses, this.absoluteImageSize, this.rotation);
+  PosePainter(
+      this.poses,
+      this.absoluteImageSize,
+      this.rotation,
+      this.cameraLensDirection, // 2. Update constructor
+      );
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4.0
-      ..color = Colors.green; // Default color
-
-    final rukuPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
-      ..color = Colors.orange; // Color for bowing
-
-    final sujudPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
-      ..color = Colors.blue; // Color for prostration
+      ..color = Colors.green;
 
     for (final pose in poses) {
-      // Helper to map coordinates
       Offset getPoint(PoseLandmarkType type) {
         final landmark = pose.landmarks[type]!;
         return Offset(
-          translateX(landmark.x, size, absoluteImageSize, rotation),
+          translateX(landmark.x, size, absoluteImageSize, rotation, cameraLensDirection),
           translateY(landmark.y, size, absoluteImageSize, rotation),
         );
       }
@@ -38,9 +34,6 @@ class PosePainter extends CustomPainter {
       void paintLine(PoseLandmarkType type1, PoseLandmarkType type2, Paint p) {
         canvas.drawLine(getPoint(type1), getPoint(type2), p);
       }
-
-      // --- DRAW THE SKELETON (No Points) ---
-      // We use the default paint for the skeleton lines
 
       // Arms
       paintLine(PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow, paint);
@@ -62,15 +55,32 @@ class PosePainter extends CustomPainter {
     }
   }
 
-  // ... (Keep the translateX and translateY helper methods from the previous answer)
-  double translateX(double x, Size canvasSize, Size imageSize, InputImageRotation rotation) {
+  // 3. Update translateX to handle mirroring
+  double translateX(
+      double x,
+      Size canvasSize,
+      Size imageSize,
+      InputImageRotation rotation,
+      CameraLensDirection cameraLensDirection,
+      ) {
+    // Calculate the standard X coordinate
+    double value;
     switch (rotation) {
       case InputImageRotation.rotation90deg:
       case InputImageRotation.rotation270deg:
-        return x * canvasSize.width / imageSize.height;
+        value = x * canvasSize.width / imageSize.height;
+        break;
       default:
-        return x * canvasSize.width / imageSize.width;
+        value = x * canvasSize.width / imageSize.width;
+        break;
     }
+
+    // IF FRONT CAMERA: Flip the X coordinate (Mirroring)
+    if (cameraLensDirection == CameraLensDirection.front) {
+      return canvasSize.width - value;
+    }
+
+    return value;
   }
 
   double translateY(double y, Size canvasSize, Size imageSize, InputImageRotation rotation) {

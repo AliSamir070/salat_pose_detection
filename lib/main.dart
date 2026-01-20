@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:sala_pose_detection/feature/home/presentation/screen/home_screen.dart';
 
-void main() {
+void main() async{
+  WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp, // Left-side Landscape
+    DeviceOrientation.portraitDown, // Right-side Landscape
+  ]);
   runApp(const MyApp());
 }
 
