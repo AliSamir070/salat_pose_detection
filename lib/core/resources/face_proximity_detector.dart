@@ -25,42 +25,44 @@ class FaceProximityDetector {
     _frameCounter++;
     if (_frameCounter % 5 != 0) return null;
     try {
-      final faces = await _faceDetector.processImage(inputImage);
+        final faces = await _faceDetector.processImage(inputImage);
 
-      if (faces.isEmpty) return false;
+        if (faces.isEmpty) return false;
 
-      final double screenWidth = inputImage.metadata!.size.width;
-      final double screenHeight = inputImage.metadata!.size.height;
-      final double screenArea = screenWidth * screenHeight;
+        final double screenWidth = inputImage.metadata!.size.width;
 
-      for (Face face in faces) {
-        // LOGIC 1: Face Width Ratio
-        // If the face width is > 60% of the screen width, it's very close.
-        double widthRatio = face.boundingBox.width / screenWidth;
+        for (Face face in faces) {
+          // GET LANDMARKS
+          final leftMouth = face.landmarks[FaceLandmarkType.leftMouth];
+          final rightMouth = face.landmarks[FaceLandmarkType.rightMouth];
+          final bottomMouth = face.landmarks[FaceLandmarkType.bottomMouth];
 
-        // LOGIC 2: "Half Face" / Clipping Check
-        // If the bounding box goes OUTSIDE the screen (negative coordinates),
-        // it means the face is so close it doesn't fit in the frame.
-        bool isClippingEdges =
-            face.boundingBox.left < 0 ||
-                face.boundingBox.top < 0 ||
-                face.boundingBox.right > screenWidth ||
-                face.boundingBox.bottom > screenHeight;
+          // If we can't find a mouth, skip
+          if (leftMouth == null || rightMouth == null || bottomMouth == null) {
+            continue;
+          }
 
-        // LOGIC 3: Area Ratio
-        double faceArea = face.boundingBox.width * face.boundingBox.height;
-        double areaRatio = faceArea / screenArea;
-        debugPrint("Face area: $faceArea");
-        debugPrint("area ratio: $areaRatio");
-        debugPrint("isClip: $isClippingEdges");
-        debugPrint("face width ratio: $widthRatio");
-        // --- SUJUD DECISION ---
-        // If face is Huge (> 60% width) OR (Large > 40% AND Cut off by edges)
-        if (widthRatio > 0.60 || (areaRatio > 0.40 && isClippingEdges)) {
-          // debugPrint("Face Close! Width: ${widthRatio.toStringAsFixed(2)}, Clipping: $isClippingEdges");
-          return true;
+          // LOGIC: Calculate "Mouth Width"
+          // Distance between left and right mouth corners
+          double mouthWidth = sqrt(
+              pow(leftMouth.position.x - rightMouth.position.x, 2) +
+                  pow(leftMouth.position.y - rightMouth.position.y, 2)
+          );
+
+          double mouthRatio = mouthWidth / screenWidth;
+
+          // DEBUG: See how big the mouth is
+          // debugPrint("👄 Mouth Ratio: ${mouthRatio.toStringAsFixed(2)}");
+
+          // THRESHOLD:
+          // If the mouth alone covers > 15% of the screen width,
+          // the face is EXTREMELY close (Sujud).
+          // (Normal standing distance, mouth ratio is usually < 0.05)
+          if (mouthRatio > 0.15) {
+            return true;
+          }
         }
-      }
+
 
     } catch (e) {
       debugPrint("Face error: $e");
