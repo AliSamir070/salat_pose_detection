@@ -1,12 +1,12 @@
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Import needed for DeviceOrientation
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
+// Import the new file
 import '../../../../core/resources/camera_utils.dart';
-import '../../../../core/resources/prayer_detector.dart';
-import '../widgets/pose_painter.dart';
+import '../../../../core/resources/face_proximity_detector.dart';
+import '../../../../core/resources/object_camera_detection.dart';
+import '../../../../core/resources/sujud_history_detector.dart';
 
 class HomeScreen extends StatefulWidget {
   static const String routeName = "home";
@@ -18,28 +18,25 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   CameraController? _controller;
-  PoseDetector? _poseDetector;
-  bool _isBusy = false;
-  List<Pose> _poses = [];
   CameraDescription? _camera;
+  // The new logic detector
+  late SujudHistoryDetector _sujudDetector;
 
-  // Track current detected pose
-  String _currentPose = "Waiting...";
-  final _prayerDetector = PrayerPoseDetector();
-
+  bool _isSujud = false;
+// 1. Define the detector
+  late CameraBlockageDetector _blockageDetector;
+  late FaceProximityDetector faceProximityDetector;
   @override
   void initState() {
     super.initState();
+    _blockageDetector = CameraBlockageDetector(); // Init
+    faceProximityDetector = FaceProximityDetector();
     _initializeCamera();
-
-    // Stream mode focuses on speed over accuracy
-    final options = PoseDetectorOptions(mode: PoseDetectionMode.stream);
-    _poseDetector = PoseDetector(options: options);
+    // ... rest of init
   }
 
   Future<void> _initializeCamera() async {
     final cameras = await availableCameras();
-    // Select the rear camera (0) or front (1) - Default to Front for selfie-style prayer detection
     _camera = cameras.firstWhere(
             (camera) => camera.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first);
@@ -54,136 +51,102 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     await _controller!.initialize();
-
-    // Important: Lock UI to Landscape if you want to force the user to hold it sideways
-    // await SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeRight]);
-
+    try { await _controller!.setFocusMode(FocusMode.auto); } catch (_) {}
     _controller!.startImageStream(_processCameraImage);
+    if(mounted) setState(() {
 
-    if (mounted) setState(() {});
+    });
   }
 
   Future<void> _processCameraImage(CameraImage image) async {
-    if (_isBusy || _poseDetector == null) return;
-    _isBusy = true;
-
     try {
-      // --- LANDSCAPE ORIENTATION FIX ---
-      // We need to calculate the rotation compensation based on how the user is holding the device.
-      // This ensures ML Kit sees an "upright" person even if the phone is sideways.
+      // --- STEP 1: CHECK BLOCKAGE FIRST (The "Sujud" Check) ---
+      // We pass the raw image directly. No rotation/conversion needed.
+      final rotation = CameraUtils.rotationIntToImageRotation(_camera!.sensorOrientation);
+      final inputImage = CameraUtils.inputImageFromCameraImage(image, _camera!, rotation);
+      bool? isBlocked = await faceProximityDetector.isFaceTooClose(inputImage);
+      debugPrint("isBlocked:$isBlocked");
+      if(isBlocked!=null){
+        if (isBlocked) {
+          if (mounted) {
+            setState(() {
+              _isSujud = true;
+              debugPrint("isSujud:$_isSujud");
 
-      final int rotationCompensation = _getRotationCompensation(_camera!, _controller!.value.deviceOrientation);
+            });
+          }
 
-      final rotation = CameraUtils.rotationIntToImageRotation(
-        rotationCompensation,
-      );
-
-      final inputImage = CameraUtils.inputImageFromCameraImage(
-          image,
-          _camera!,
-          rotation
-      );
-
-      final poses = await _poseDetector!.processImage(inputImage);
-
-      if (poses.isNotEmpty) {
-        String detectedStatus = _prayerDetector.detectPose(poses.first);
-        if (mounted) {
+          return; // STOP HERE. Do not run heavy ML Kit if blocked.
+        }
+        if(mounted){
           setState(() {
-            _poses = poses;
-            if(detectedStatus!=_currentPose){
-              _currentPose = detectedStatus;
-            }
+            _isSujud = false;
           });
         }
       }
     } catch (e) {
-      print("Error detecting pose: $e");
+      print("Error: $e");
     } finally {
-      _isBusy = false;
+      //_isSujud = false;
     }
-  }
+    debugPrint("isSujud:$_isSujud");
 
-  // Helper to calculate correct rotation for ML Kit based on Device Orientation
-  int _getRotationCompensation(CameraDescription camera, DeviceOrientation orientation) {
-    int deviceOrientationDeg = 0;
-    switch (orientation) {
-      case DeviceOrientation.portraitUp:
-        deviceOrientationDeg = 0;
-        break;
-      case DeviceOrientation.landscapeLeft:
-        deviceOrientationDeg = 90;
-        break;
-      case DeviceOrientation.portraitDown:
-        deviceOrientationDeg = 180;
-        break;
-      case DeviceOrientation.landscapeRight:
-        deviceOrientationDeg = 270;
-        break;
-    }
-
-    int rotationCompensation;
-    if (camera.lensDirection == CameraLensDirection.front) {
-      rotationCompensation = (camera.sensorOrientation + deviceOrientationDeg) % 360;
-    } else {
-      rotationCompensation = (camera.sensorOrientation - deviceOrientationDeg + 360) % 360;
-    }
-    return rotationCompensation;
   }
 
   @override
   void dispose() {
     _controller?.dispose();
-    _poseDetector?.close();
-    // Reset orientation preference when leaving
-    // SystemChrome.setPreferredOrientations([]);
+    _sujudDetector.close();
+    faceProximityDetector.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     if (_controller == null || !_controller!.value.isInitialized) {
-      return Container();
+      return const Scaffold(backgroundColor: Colors.black);
     }
-
-    // We recalculate rotation for the Painter to match the Preview
-    // This assumes the Painter draws on top of the live preview which rotates with the device
-    final int rotationCompensation = _getRotationCompensation(_camera!, _controller!.value.deviceOrientation);
-
+    debugPrint("build : $_isSujud");
     return Scaffold(
+      backgroundColor: Colors.black,
       body: Stack(
-        alignment: Alignment.bottomCenter,
+        fit: StackFit.expand,
         children: [
-          Stack(
-            fit: StackFit.expand,
+          CameraPreview(_controller!),
+
+          // Status Overlay
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              CameraPreview(_controller!),
-              if (_poses.isNotEmpty)
-                CustomPaint(
-                  painter: PosePainter(
-                    _poses,
-                    _controller!.value.previewSize!,
-                    CameraUtils.rotationIntToImageRotation(rotationCompensation),
-                    _camera!.lensDirection, // <--- Add this line
-                  ),
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 40),
+                decoration: BoxDecoration(
+                    color: _isSujud ? Colors.green : Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white, width: 2)
                 ),
-            ],
-          ),
-          Container(
-              margin: EdgeInsets.only(bottom: 20),
-              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                color: Colors.black.withOpacity(0.7),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _isSujud ? Icons.check_circle : Icons.accessibility_new,
+                      color: Colors.white,
+                      size: 60,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _isSujud ? "SUJUD" : "Scanning...",
+                      style: const TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              child: Text(
-                _currentPose,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-              ))
+            ],
+          )
         ],
       ),
     );
